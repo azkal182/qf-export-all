@@ -101,33 +101,63 @@ async function run() {
   if (onlyWants("resources")) {
     log.info("resources: fetching catalogs");
 
+    const langForMeta = LANGUAGE;
+
     // languages
     let r = await c.get(Resources.languages.path, {
-      params: { language: LANGUAGE },
+      params: { language: langForMeta },
     });
     (r.data?.languages || []).forEach((x: any) =>
       ndjson("languages.ndjson", x)
     );
 
-    // translations & tafsirs & recitations
+    // translations
     r = await c.get(Resources.translations.path, {
-      params: { language: LANGUAGE },
+      params: { language: langForMeta },
     });
-    (r.data?.translations || []).forEach((x: any) =>
-      ndjson("translation_resources.ndjson", x)
-    );
+    const allTr = r.data?.translations || [];
+    const target = wantedResourceLang();
+    const mode = (process.env.RESOURCE_FILTER_MODE || "strict").toLowerCase();
 
-    r = await c.get(Resources.tafsirs.path, { params: { language: LANGUAGE } });
-    (r.data?.tafsirs || []).forEach((x: any) =>
-      ndjson("tafsir_resources.ndjson", x)
-    );
+    const trFiltered =
+      mode === "all"
+        ? allTr
+        : allTr.filter((x: any) => resourceMatchesLang(x, target));
 
+    log.info("resources: translations catalog", {
+      mode,
+      target,
+      total: allTr.length,
+      filtered: trFiltered.length,
+    });
+    trFiltered.forEach((x: any) => ndjson("translation_resources.ndjson", x));
+
+    // tafsirs
+    r = await c.get(Resources.tafsirs.path, {
+      params: { language: langForMeta },
+    });
+    const allTf = r.data?.tafsirs || [];
+    const tfFiltered =
+      mode === "all"
+        ? allTf
+        : allTf.filter((x: any) => resourceMatchesLang(x, target));
+
+    log.info("resources: tafsirs catalog", {
+      mode,
+      target,
+      total: allTf.length,
+      filtered: tfFiltered.length,
+    });
+    tfFiltered.forEach((x: any) => ndjson("tafsir_resources.ndjson", x));
+
+    // recitations (tidak difilter bahasa)
     r = await c.get(Resources.recitations.path, {
-      params: { language: LANGUAGE },
+      params: { language: langForMeta },
     });
     (r.data?.recitations || []).forEach((x: any) =>
       ndjson("recitations.ndjson", x)
     );
+
     log.info("resources: done");
   }
 
@@ -273,117 +303,314 @@ async function run() {
       }
     }
     log.info("quran: scripts done", { fetched: progress.quran_scripts_done });
+
+    // === Quran: single translation / single tafsir (FILTERED by resource language) ===
+    {
+      const langForMeta = LANGUAGE;
+      const target = wantedResourceLang();
+      const mode = (process.env.RESOURCE_FILTER_MODE || "strict").toLowerCase();
+      const fallback = (
+        process.env.RESOURCE_LANG_FALLBACK || "en"
+      ).toLowerCase();
+
+      // ambil katalog translations & tafsirs untuk di-filter
+      const tr = await c.get(Resources.translations.path, {
+        params: { language: langForMeta },
+      });
+      const tf = await c.get(Resources.tafsirs.path, {
+        params: { language: langForMeta },
+      });
+
+      let trs = tr.data?.translations || [];
+      let tfs = tf.data?.tafsirs || [];
+
+      // filter translation resources
+      let trsFiltered = trs;
+      if (mode !== "all") {
+        trsFiltered = trs.filter((x: any) => resourceMatchesLang(x, target));
+        if (mode === "fallback" && trsFiltered.length === 0) {
+          log.warn(
+            "quran/single_translation: no resource matched target, using fallback",
+            { target, fallback }
+          );
+          trsFiltered = trs.filter((x: any) =>
+            resourceMatchesLang(x, fallback)
+          );
+        }
+      }
+      log.info("quran/single_translation: resources to fetch", {
+        count: trsFiltered.length,
+        mode,
+        target,
+      });
+
+      // filter tafsir resources
+      let tfsFiltered = tfs;
+      if (mode !== "all") {
+        tfsFiltered = tfs.filter((x: any) => resourceMatchesLang(x, target));
+        if (mode === "fallback" && tfsFiltered.length === 0) {
+          log.warn(
+            "quran/single_tafsir: no resource matched target, using fallback",
+            { target, fallback }
+          );
+          tfsFiltered = tfs.filter((x: any) =>
+            resourceMatchesLang(x, fallback)
+          );
+        }
+      }
+      log.info("quran/single_tafsir: resources to fetch", {
+        count: tfsFiltered.length,
+        mode,
+        target,
+      });
+
+      // scopes yang didukung endpoint quran/*: per chapter/page/juz/hizb/rub + verse_key
+      const scopes = [
+        { key: "chapter_number", values: range(1, 114) },
+        { key: "page_number", values: range(1, 604) },
+        { key: "juz_number", values: range(1, 30) },
+        { key: "hizb_number", values: range(1, 60) },
+        { key: "rub_el_hizb_number", values: range(1, 240) },
+      ];
+
+      // ---- single translation (per resource) ----
+      for (const res of trsFiltered) {
+        for (const sc of scopes) {
+          const last = Number(
+            getCP(`quran_single_translation_res_${res.id}`, sc.key, 0)
+          );
+          for (const v of sc.values) {
+            if (v <= last) continue;
+
+            const path = QuranScripts.single_translation.path.replace(
+              "{resource_id}",
+              String(res.id)
+            );
+            const r = await c.get(path, {
+              params: { [sc.key]: v, language: langForMeta },
+            });
+
+            ndjson("quran_single_translation.ndjson", {
+              resource_id: res.id,
+              scope: sc.key,
+              value: v,
+              payload: r.data,
+            });
+
+            setCP(`quran_single_translation_res_${res.id}`, sc.key, v);
+            log.debug("quran/single_translation: fetched", {
+              resource_id: res.id,
+              scope: sc.key,
+              value: v,
+            });
+
+            await sleep(Number(process.env.SLEEP_MS || 200));
+          }
+          setCP(
+            `quran_single_translation_res_${res.id}`,
+            `${sc.key}_done`,
+            true
+          );
+        }
+      }
+
+      // ---- single tafsir (per resource) ----
+      for (const res of tfsFiltered) {
+        for (const sc of scopes) {
+          const last = Number(
+            getCP(`quran_single_tafsir_res_${res.id}`, sc.key, 0)
+          );
+          for (const v of sc.values) {
+            if (v <= last) continue;
+
+            const path = QuranScripts.single_tafsir.path.replace(
+              "{resource_id}",
+              String(res.id)
+            );
+            const r = await c.get(path, {
+              params: { [sc.key]: v, language: langForMeta },
+            });
+
+            ndjson("quran_single_tafsir.ndjson", {
+              resource_id: res.id,
+              scope: sc.key,
+              value: v,
+              payload: r.data,
+            });
+
+            setCP(`quran_single_tafsir_res_${res.id}`, sc.key, v);
+            log.debug("quran/single_tafsir: fetched", {
+              resource_id: res.id,
+              scope: sc.key,
+              value: v,
+            });
+
+            await sleep(Number(process.env.SLEEP_MS || 200));
+          }
+          setCP(`quran_single_tafsir_res_${res.id}`, `${sc.key}_done`, true);
+        }
+      }
+
+      log.info("quran: single translation/tafsir done", {
+        translations_resources: trsFiltered.length,
+        tafsirs_resources: tfsFiltered.length,
+      });
+    }
   }
 
   // 6) Translations & Tafsirs (iterate all resources) with resume per resource+chapter+page
-  if (onlyWants("translations") || onlyWants("tafsirs")) {
-    // --- Translations ---
-    if (onlyWants("translations")) {
-      const tr = await c.get(Resources.translations.path, {
-        params: { language: LANGUAGE },
-      });
-      const trs = tr.data?.translations || [];
+  if (onlyWants("translations")) {
+    const langForMeta = LANGUAGE;
+    const target = wantedResourceLang();
+    const mode = (process.env.RESOURCE_FILTER_MODE || "strict").toLowerCase();
+    const fallback = (process.env.RESOURCE_LANG_FALLBACK || "en").toLowerCase();
 
-      for (const res of trs) {
-        log.info("translations: resource start", {
-          resource_id: res.id,
-          name: res.name,
+    const tr = await c.get(Resources.translations.path, {
+      params: { language: langForMeta },
+    });
+    let trs = tr.data?.translations || [];
+
+    let trsFiltered = trs;
+    if (mode !== "all") {
+      trsFiltered = trs.filter((x: any) => resourceMatchesLang(x, target));
+      if (mode === "fallback" && trsFiltered.length === 0) {
+        log.warn("translations: no resource matched target, using fallback", {
+          target,
+          fallback,
         });
+        trsFiltered = trs.filter((x: any) => resourceMatchesLang(x, fallback));
+      }
+    }
 
-        for (const s of range(1, 114)) {
-          let page = Number(
-            getCP(`translations_res_${res.id}`, `ch_${s}_page`, 1)
+    log.info("translations: resources to fetch", {
+      count: trsFiltered.length,
+      mode,
+      target,
+    });
+
+    for (const res of trsFiltered) {
+      log.info("translations: resource start", {
+        resource_id: res.id,
+        name: res.name,
+      });
+
+      for (const s of range(1, 114)) {
+        let page = Number(
+          getCP(`translations_res_${res.id}`, `ch_${s}_page`, 1)
+        );
+        while (true) {
+          const r = await c.get(
+            Translations.bySurah.path
+              .replace("{resource_id}", String(res.id))
+              .replace("{chapter_number}", String(s)),
+            { params: { language: langForMeta, page, per_page: PER_PAGE } }
           );
-          while (true) {
-            const r = await c.get(
-              Translations.bySurah.path
-                .replace("{resource_id}", String(res.id))
-                .replace("{chapter_number}", String(s)),
-              { params: { language: LANGUAGE, page, per_page: PER_PAGE } }
-            );
 
-            const items = r.data?.translations || r.data?.result || [];
-            if (!items.length) break;
-            for (const x of items) {
-              ndjson("translations.ndjson", { resource_id: res.id, ...x });
-            }
+          const items = r.data?.translations || r.data?.result || [];
+          if (!items.length) break;
 
-            setCP(`translations_res_${res.id}`, `ch_${s}_page`, page);
-            log.debug("translations: page", {
-              resource_id: res.id,
-              chapter: s,
-              page,
-              count: items.length,
-            });
-
-            const total = r.data?.pagination?.total_pages || page;
-            if (page >= total) break;
-            page++;
-            await sleep(Number(process.env.SLEEP_MS || 200));
+          for (const x of items) {
+            ndjson("translations.ndjson", { resource_id: res.id, ...x });
           }
-          setCP(`translations_res_${res.id}`, `ch_${s}_done`, true);
+
+          setCP(`translations_res_${res.id}`, `ch_${s}_page`, page);
+          log.debug("translations: page", {
+            resource_id: res.id,
+            chapter: s,
+            page,
+            count: items.length,
+          });
+
+          const total = r.data?.pagination?.total_pages || page;
+          if (page >= total) break;
+          page++;
+          await sleep(Number(process.env.SLEEP_MS || 200));
         }
-
-        progress.translations_done++;
-        setCP("translations", `res_${res.id}_done`, true);
-        log.info("translations: resource done", { resource_id: res.id });
+        setCP(`translations_res_${res.id}`, `ch_${s}_done`, true);
       }
-      log.info("translations: all done", {
-        resources: progress.translations_done,
-      });
+
+      progress.translations_done++;
+      setCP("translations", `res_${res.id}_done`, true);
+      log.info("translations: resource done", { resource_id: res.id });
     }
+    log.info("translations: all done", {
+      resources: progress.translations_done,
+    });
+  }
 
-    // --- Tafsirs ---
-    if (onlyWants("tafsirs")) {
-      const tf = await c.get(Resources.tafsirs.path, {
-        params: { language: LANGUAGE },
-      });
-      const tfs = tf.data?.tafsirs || [];
+  if (onlyWants("tafsirs")) {
+    const langForMeta = LANGUAGE;
+    const target = wantedResourceLang();
+    const mode = (process.env.RESOURCE_FILTER_MODE || "strict").toLowerCase();
+    const fallback = (process.env.RESOURCE_LANG_FALLBACK || "en").toLowerCase();
 
-      for (const res of tfs) {
-        log.info("tafsirs: resource start", {
-          resource_id: res.id,
-          name: res.name,
+    const tf = await c.get(Resources.tafsirs.path, {
+      params: { language: langForMeta },
+    });
+    let tfs = tf.data?.tafsirs || [];
+
+    let tfsFiltered = tfs;
+    if (mode !== "all") {
+      tfsFiltered = tfs.filter((x: any) => resourceMatchesLang(x, target));
+      if (mode === "fallback" && tfsFiltered.length === 0) {
+        log.warn("tafsirs: no resource matched target, using fallback", {
+          target,
+          fallback,
         });
-
-        for (const s of range(1, 114)) {
-          let page = Number(getCP(`tafsirs_res_${res.id}`, `ch_${s}_page`, 1));
-          while (true) {
-            const r = await c.get(
-              Tafsirs.bySurah.path
-                .replace("{resource_id}", String(res.id))
-                .replace("{chapter_number}", String(s)),
-              { params: { language: LANGUAGE, page, per_page: PER_PAGE } }
-            );
-
-            const items = r.data?.tafsirs || r.data?.result || [];
-            if (!items.length) break;
-            for (const x of items) {
-              ndjson("tafsirs.ndjson", { resource_id: res.id, ...x });
-            }
-
-            setCP(`tafsirs_res_${res.id}`, `ch_${s}_page`, page);
-            log.debug("tafsirs: page", {
-              resource_id: res.id,
-              chapter: s,
-              page,
-              count: items.length,
-            });
-
-            const total = r.data?.pagination?.total_pages || page;
-            if (page >= total) break;
-            page++;
-            await sleep(Number(process.env.SLEEP_MS || 200));
-          }
-          setCP(`tafsirs_res_${res.id}`, `ch_${s}_done`, true);
-        }
-
-        progress.tafsirs_done++;
-        setCP("tafsirs", `res_${res.id}_done`, true);
-        log.info("tafsirs: resource done", { resource_id: res.id });
+        tfsFiltered = tfs.filter((x: any) => resourceMatchesLang(x, fallback));
       }
-      log.info("tafsirs: all done", { resources: progress.tafsirs_done });
     }
+
+    log.info("tafsirs: resources to fetch", {
+      count: tfsFiltered.length,
+      mode,
+      target,
+    });
+
+    for (const res of tfsFiltered) {
+      log.info("tafsirs: resource start", {
+        resource_id: res.id,
+        name: res.name,
+      });
+
+      for (const s of range(1, 114)) {
+        let page = Number(getCP(`tafsirs_res_${res.id}`, `ch_${s}_page`, 1));
+        while (true) {
+          const r = await c.get(
+            Tafsirs.bySurah.path
+              .replace("{resource_id}", String(res.id))
+              .replace("{chapter_number}", String(s)),
+            { params: { language: langForMeta, page, per_page: PER_PAGE } }
+          );
+
+          const items = r.data?.tafsirs || r.data?.result || [];
+          if (!items.length) break;
+
+          for (const x of items) {
+            ndjson("tafsirs.ndjson", { resource_id: res.id, ...x });
+          }
+
+          setCP(`tafsirs_res_${res.id}`, `ch_${s}_page`, page);
+          log.debug("tafsirs: page", {
+            resource_id: res.id,
+            chapter: s,
+            page,
+            count: items.length,
+          });
+
+          const total = r.data?.pagination?.total_pages || page;
+          if (page >= total) break;
+          page++;
+          await sleep(Number(process.env.SLEEP_MS || 200));
+        }
+        setCP(`tafsirs_res_${res.id}`, `ch_${s}_done`, true);
+      }
+
+      progress.tafsirs_done++;
+      setCP("tafsirs", `res_${res.id}_done`, true);
+      log.info("tafsirs: resource done", { resource_id: res.id });
+    }
+    log.info("tafsirs: all done", { resources: progress.tafsirs_done });
   }
 
   // 7) Audio (recitations + chapter audio files) with resume per reciter id
