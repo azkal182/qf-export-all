@@ -1,21 +1,47 @@
 # Quran Foundation Content APIs v4 → Full Dataset Exporter
 
-Ambil **seluruh endpoint Content APIs v4** (Chapters, Verses+Words, Quran scripts/glyph, Resources, Translations, Tafsirs, Audio, dan Search) lalu simpan ke **NDJSON**. Dataset bisa diimpor ke **PostgreSQL** pakai `sql/schema.sql` dan skrip import otomatis.
+Export **all Content APIs v4 endpoints** (Chapters, Verses+Words, Quran scripts/glyphs, Resources, Translations, Tafsirs, Audio, and Search) and save to **NDJSON** format. Dataset can be imported to **PostgreSQL** using `sql/schema.sql` and automated import scripts.
 
-Fitur utama:
+## ✨ Key Features
 
-* ✅ **OAuth2 Client Credentials** (`scope=content`)
-* ✅ **Resume/Checkpoint** per segmen (lanjut dari titik terakhir)
+* ✅ **OAuth2 Client Credentials** (`scope=content`) with **auto-refresh JWT**
+* ✅ **Automatic retry** for 5xx/network errors (up to 3x, exponential backoff + jitter)
+* ✅ **Resume/Checkpoint** per segment (continue from last point)
+* ✅ **Resource filtering** (translations/tafsirs) by target language only
 * ✅ **Logging** (console/file, JSON/non-JSON) + **heartbeat progress**
-* ✅ **Mode Dev (ts-node/esm)** & **Mode Build (compile ke dist/)**
-* ✅ **Importer otomatis ke PostgreSQL** (tanpa `jq`)
-* ✅ **Validator** untuk cek kelengkapan dataset
+* ✅ **Telegram notifications** for fatal errors
+* ✅ **Dev Mode (ts-node/esm)** & **Build Mode (compile to dist/)**
+* ✅ **Automatic PostgreSQL importer** (without `jq`)
+* ✅ **Validator** to check dataset completeness
 
-> Proyek ini mengekspor data publik melalui **Content APIs v4**. Perhatikan syarat & ketentuan layanan Qur'an Foundation untuk penggunaan data.
+> ⚠️ **Important**: This project exports public data through **Content APIs v4**. Please observe Qur'an Foundation's terms of service for data usage.
+
+## 📋 Version Compatibility
+
+### Node.js Versions
+| Version | Status | Notes |
+|---------|--------|-------|
+| 18.x | ✅ Minimum | LTS (Active) |
+| 20.x | ✅ Recommended | LTS (Recommended) |
+| 22.x | ✅ Supported | Current |
+
+### PostgreSQL Versions
+| Version | Status | Features |
+|---------|--------|----------|
+| 13.x | ✅ Minimum | Basic JSON support |
+| 14.x | ✅ Supported | Improved JSON performance |
+| 15.x | ✅ Recommended | Better bulk import |
+| 16.x | ✅ Latest | Optimal performance |
+
+### OS Compatibility
+- ✅ **Linux** (Ubuntu 20.04+, CentOS 8+)
+- ✅ **macOS** (10.15+)
+- ✅ **Windows** (10+, WSL2 recommended)
+- ✅ **Docker** (Multi-platform)
 
 ---
 
-## Struktur Proyek
+## 📁 Project Structure
 
 ```
 qf-export-all/
@@ -27,42 +53,54 @@ qf-export-all/
 ├── sql/
 │   └── schema.sql
 ├── src/
-│   ├── http.ts
+│   ├── http.ts         # HTTP client (token refresh + retry)
 │   ├── util.ts
 │   ├── endpoints.ts
 │   ├── normalizers.ts
 │   ├── checkpoint.ts
 │   ├── logger.ts
-│   ├── run.ts          # exporter utama (sudah ada resume + logging)
-│   ├── import.ts       # importer NDJSON -> Postgres
-│   └── validate.ts     # validator data
-└── out/                # hasil NDJSON
+│   ├── telegram.ts     # Telegram notifications
+│   ├── run.ts          # main exporter
+│   ├── import.ts       # NDJSON -> Postgres importer
+│   └── validate.ts     # data validator
+└── out/                # NDJSON output
 ```
 
 ---
 
-## Persiapan
+## 🚀 Quick Start
 
-### 1) Node.js & PostgreSQL
+### 1. Prerequisites
 
-* Node **v18+** (disarankan v20+)
-* PostgreSQL **13+**
+* **Node.js** v18+ (v20+ recommended)
+* **PostgreSQL** 13+
 
-### 2) Install deps & env
+### 2. Installation
 
 ```bash
-npm i
+# Clone repository
+git clone <repository-url>
+cd qf-export-all
+
+# Install dependencies
+npm install
+
+# Setup environment
 cp .env.example .env
-# isi CLIENT_ID & CLIENT_SECRET (OAuth2 Client Credentials)
-# isi DATABASE_URL (contoh: postgresql://postgres:postgres@localhost:5432/quran_local)
 ```
 
-### 3) Konfigurasi tsconfig (sudah disediakan)
+### 3. Environment Configuration
 
-* **Dev**: `tsconfig.dev.json` (no emit, ts-node/esm)
-* **Build**: `tsconfig.build.json` (emit → `dist/`)
+Edit the `.env` file and fill in your credentials:
 
-### 4) Script yang tersedia
+```ini
+# API & OAuth
+CLIENT_ID=your-client-id
+CLIENT_SECRET=your-client-secret
+DATABASE_URL=postgresql://postgres:postgres@localhost:5432/quran_local
+```
+
+### 4. Available Scripts
 
 ```json
 {
@@ -82,202 +120,375 @@ cp .env.example .env
 
 ---
 
-## Menjalankan Exporter
+## 📥 Running the Exporter
 
-### Opsi A — Mode Dev (cepat, tanpa build)
+### Development Mode (Fast, no build required)
 
 ```bash
 npm run dev:fetch
 ```
 
-### Opsi B — Mode Build (kompilasi ke `dist/`)
+### Production Mode (Compile to `dist/`)
 
 ```bash
+# Full export
 npm run fetch
-# jika proses terputus / ingin lanjut:
+
+# Resume if interrupted
 npm run fetch:resume
 ```
 
-**Filter subset** dengan env `ONLY` (comma-separated). Contoh:
+### Export Subset Data
+
+Use the `ONLY` environment variable to export specific data:
 
 ```bash
 ONLY=chapters,verses,words npm run dev:fetch
-# opsi: chapters, verses, words, quran, translations, tafsirs, resources, audio, juz, search
+
+# Available options:
+# chapters, verses, words, quran, translations, tafsirs, resources, audio, juz, search
 ```
 
-**Rate-limit & concurrency** (atur di `.env`):
+### Rate Limiting Configuration
 
-* `PER_PAGE` (default 50)
-* `CONCURRENCY` (default 4)
-* `SLEEP_MS` (default 200 ms antar request)
+Adjust in the `.env` file:
 
-> Exporter otomatis melakukan pagination untuk endpoint yang mendukungnya.
+```ini
+PER_PAGE=50           # items per page
+CONCURRENCY=4         # concurrent requests
+SLEEP_MS=200          # delay between requests (ms)
+```
 
 ---
 
-## Resume / Checkpoint
+## 💾 Resume & Checkpoint
 
-Aktifkan dengan `CHECKPOINT_PATH` (contoh: `.checkpoint.json`). Contoh jalankan:
+Enable checkpointing to continue interrupted exports:
 
 ```bash
+# With checkpoint
 CHECKPOINT_PATH=.checkpoint.json npm run dev:fetch
-# atau pakai script build:
+
+# Or use resume script
 npm run fetch:resume
 ```
 
-Yang dicatat:
-
-* **Verses**: per surah + halaman (`verses_by_chapter.ch_{n}_page`)
-* **Quran scripts/glyph**: per `kind + scope` (`quran_{kind}.{scope}`)
-* **Translations/Tafsirs**: per `resource_id + chapter + page`
-* **Audio**: per `reciter_id`
-
-> Checkpoint aman di-commit (opsional) untuk resume lintas mesin.
+**Checkpoint tracks progress for:**
+- **Verses**: per surah + page
+- **Quran scripts/glyphs**: per `kind + scope`
+- **Translations/Tafsirs**: per `resource_id + chapter + page`
+- **Audio**: per `reciter_id`
+- **Single translation/tafsir**: per `resource_id + scope`
 
 ---
 
-## Logging & Heartbeat
+## 📊 Logging & Monitoring
 
-Opsi di `.env`:
+Configure logging in `.env`:
 
 ```ini
 LOG_LEVEL=info          # debug|info|warn|error
 LOG_JSON=false          # true = output JSON lines
-LOG_FILE=               # contoh: logs/qf-export.log (kosong = console saja)
-LOG_INTERVAL_MS=10000   # interval heartbeat (ms), 0 = nonaktif
-```
-
-Contoh:
-
-```bash
-# console, verbose
-LOG_LEVEL=debug npm run dev:fetch
-
-# tulis ke file + JSON (cocok untuk tail + jq)
-LOG_JSON=true LOG_FILE=logs/qf-export.log npm run dev:fetch
-tail -f logs/qf-export.log | jq .
-```
-
-Contoh output non-JSON:
-
-```
-2025-09-12T04:21:00.123Z ℹ️  INFO export started {"BASE_URL":"...","LANGUAGE":"en","PER_PAGE":"50","ONLY":"(all)"}
-2025-09-12T04:21:01.790Z ℹ️  INFO verses: chapter start {"chapter":1}
-2025-09-12T04:21:02.210Z 🐛 DEBUG verses: page done {"chapter":1,"page":1,"total_pages":7}
-...
-2025-09-12T04:21:10.000Z ℹ️  INFO heartbeat {"chapters_done":114,"verses_ch_done":12,"verses_total_pages":84,"verses_last":{"chapter":12,"page":3}, ...}
-2025-09-12T04:30:55.321Z ℹ️  INFO export finished ✅
+LOG_FILE=               # example: logs/qf-export.log (empty = console only)
+LOG_INTERVAL_MS=10000   # heartbeat interval (ms), 0 = disabled
 ```
 
 ---
 
-## Output Dataset (NDJSON)
+## 🌐 Resource Language Filtering
 
-Folder `out/` berisi file-file:
+Filter translations/tafsirs by language:
 
-* `chapters.ndjson`, `chapter_infos.ndjson`
-* `verses.ndjson`, `words.ndjson` (**words aktif** via `fields=words` + `word_fields`)
-* `quran_*.ndjson` (script teks & glyph: uthmani\_simple, uthmani, indopak, tajweed, imlaei\_simple, code\_v1, code\_v2)
-* `languages.ndjson`, `translation_resources.ndjson`, `tafsir_resources.ndjson`
-* `translations.ndjson`, `tafsirs.ndjson`
-* `recitations.ndjson`, `chapter_audio_files.ndjson`
-* `juzs.ndjson`
-* `search.ndjson` (opsional seed)
+```ini
+RESOURCE_FILTER_MODE=strict   # strict|fallback|all
+RESOURCE_LANG=                # defaults to LANGUAGE
+RESOURCE_LANG_FALLBACK=en     # used when mode=fallback
+```
+
+**Filtering modes:**
+- **strict** → only fetch resources matching target language
+- **fallback** → if empty, use fallback language
+- **all** → fetch all resources (legacy behavior)
+
+**Example:**
+
+```bash
+LANGUAGE=en RESOURCE_FILTER_MODE=strict RESOURCE_LANG=id npm run dev:fetch
+```
 
 ---
 
-## Import ke PostgreSQL
+## 🔄 Retry & Error Handling
 
-1. Buat DB & schema:
+Configure retry behavior in `.env`:
+
+```ini
+MAX_RETRIES=3
+BACKOFF_BASE_MS=500
+```
+
+**Error handling:**
+- **401 (JWT expired)** → auto-refresh token, retry request
+- **5xx/network errors** → retry up to `MAX_RETRIES` with exponential backoff + jitter
+- **Fatal errors** → exporter stops and sends Telegram notification (if enabled)
+
+---
+
+## 📢 Telegram Notifications
+
+Enable notifications for fatal errors:
+
+```ini
+TELEGRAM_ENABLED=true
+TELEGRAM_BOT_TOKEN=123456:ABC...
+TELEGRAM_CHAT_ID=123456789
+```
+
+**Setup instructions:**
+1. Create a new bot via [@BotFather](https://t.me/BotFather)
+2. Get the `BOT_TOKEN`
+3. Get the `CHAT_ID` by sending a message to your bot, then access `https://api.telegram.org/bot<BOT_TOKEN>/getUpdates`
+
+---
+
+## 📄 Output Dataset (NDJSON)
+
+Export output files in the `out/` folder:
+
+```
+out/
+├── chapters.ndjson
+├── chapter_infos.ndjson
+├── verses.ndjson
+├── words.ndjson
+├── quran_uthmani_simple.ndjson
+├── quran_uthmani.ndjson
+├── quran_indopak.ndjson
+├── quran_tajweed.ndjson
+├── quran_imlaei_simple.ndjson
+├── quran_code_v1.ndjson
+├── quran_code_v2.ndjson
+├── quran_single_translation.ndjson
+├── quran_single_tafsir.ndjson
+├── languages.ndjson
+├── translation_resources.ndjson
+├── tafsir_resources.ndjson
+├── translations.ndjson
+├── tafsirs.ndjson
+├── recitations.ndjson
+├── chapter_audio_files.ndjson
+├── juzs.ndjson
+└── search.ndjson
+```
+
+---
+
+## 🗄️ PostgreSQL Import
+
+### 1. Database Setup
 
 ```bash
+# Create database
 createdb quran_local
+
+# Import schema
 psql "$DATABASE_URL" -f sql/schema.sql
 ```
 
-2. Import dengan skrip:
+### 2. Import Data
 
 ```bash
 npm run import
 ```
 
-Skrip import:
-
-* Membaca tiap NDJSON di `out/`
-* Memetakan kolom → tabel skema (`sql/schema.sql`)
-* Menggunakan `COPY` (stream) untuk performa
-
-> Jika ingin menambahkan mapping baru, lengkapi array `maps` di `src/import.ts`.
-
 ---
 
-## Validasi Dataset
+## ✅ Dataset Validation
+
+Run the validator to check data consistency:
 
 ```bash
 npm run validate
 ```
 
-Validator mengecek:
-
-* Jumlah baris per tabel inti
-* Kesesuaian `chapters.verses_count` vs jumlah real di `verses`
-* Ayat tanpa `words` (idealnya 0)
-* Konsistensi `position` kata per ayat (1..N)
+**Validator checks:**
+- Row counts per core table
+- Consistency of `chapters.verses_count` vs actual count in `verses`
+- Verses without `words` (should ideally be 0)
+- Consistency of word `position` per verse (1..N)
 
 ---
 
-## Konfigurasi `.env`
+## ⚙️ Complete Configuration (.env)
 
 ```ini
-# API & OAuth
+# ============================================
+# API & OAuth Configuration
+# ============================================
 BASE_URL=https://apis.quran.foundation/content/api/v4
 OAUTH_TOKEN_URL=https://oauth2.quran.foundation/oauth2/token
 CLIENT_ID=your-client-id
 CLIENT_SECRET=your-client-secret
 LANGUAGE=en
 
-# Crawl
+# ============================================
+# Crawl Configuration
+# ============================================
 PER_PAGE=50
 CONCURRENCY=4
 SLEEP_MS=200
 ONLY=
 
-# Database
+# ============================================
+# Database Configuration
+# ============================================
 DATABASE_URL=postgresql://postgres:postgres@localhost:5432/quran_local
 
-# Checkpoint
+# ============================================
+# Checkpoint Configuration
+# ============================================
 CHECKPOINT_PATH=.checkpoint.json
 
-# Logging
+# ============================================
+# Logging Configuration
+# ============================================
 LOG_LEVEL=info
 LOG_JSON=false
 LOG_FILE=
 LOG_INTERVAL_MS=10000
+
+# ============================================
+# Resource Filtering
+# ============================================
+RESOURCE_FILTER_MODE=strict
+RESOURCE_LANG=
+RESOURCE_LANG_FALLBACK=en
+
+# ============================================
+# Retry Configuration
+# ============================================
+MAX_RETRIES=3
+BACKOFF_BASE_MS=500
+
+# ============================================
+# Telegram Notification
+# ============================================
+TELEGRAM_ENABLED=false
+TELEGRAM_BOT_TOKEN=
+TELEGRAM_CHAT_ID=
 ```
 
 ---
 
-## Tips & Troubleshooting
+## 🔧 Troubleshooting
 
-* **Module not found (.ts/.js)**
+### Module not found (.ts/.js)
+- **Dev mode (ts-node/esm)**: relative imports can use `.ts`
+- **Build mode (dist)**: ensure relative imports use `.js`
 
-  * Mode dev (ts-node/esm): import relatif boleh `.ts`
-  * Mode build (dist): **pastikan import relatif pakai `.js`** (sudah di file `run.ts`).
-* **429 / Rate limit**
+### 429 Rate Limit
+- Increase `SLEEP_MS` or decrease `CONCURRENCY`
+- Some endpoints have strict rate limits
 
-  * Naikkan `SLEEP_MS` atau turunkan `CONCURRENCY`.
-* **Token expired**
+### Token Expired
+- JWT auto-refresh is handled automatically
+- Ensure `CLIENT_ID` and `CLIENT_SECRET` are correct
 
-  * Token otomatis di-refresh (cache ±55 menit).
-* **Partial data / putus di tengah**
+### Partial Data / Interrupted Export
+- Run `npm run fetch:resume` to continue
+- Use `CHECKPOINT_PATH` for progress tracking
 
-  * Jalankan `npm run fetch:resume` (butuh `CHECKPOINT_PATH`).
-* **Import "not found file"**
-
-  * Pastikan exporter selesai membuat NDJSON; cek log & `out/`.
+### No Resources for Specific Language
+- If `strict` filter returns 0 results, segment is skipped (normal)
+- Try using `fallback` or `all` mode
 
 ---
 
-## Lisensi & Kepatuhan
+## 📋 Development Tips
 
-Dataset yang dihasilkan berasal dari **Content APIs v4** dengan kredensial dan cakupan yang kamu miliki. Harap patuhi **Terms of Service**/lisensi Quran Foundation untuk distribusi dan penggunaan data.
+### TypeScript Configuration
+- **Dev**: `tsconfig.dev.json` (no emit, ts-node/esm)
+- **Build**: `tsconfig.build.json` (emit → `dist/`)
+
+### Import Statements
+```typescript
+// ✅ Correct (with .js extension for build)
+import { something } from './utils.js';
+
+// ❌ Incorrect (missing .js, will fail in build)
+import { something } from './utils';
+```
+
+### Performance Tuning
+```ini
+# For slow APIs
+SLEEP_MS=500
+CONCURRENCY=2
+
+# For fast connections
+SLEEP_MS=100
+CONCURRENCY=8
+```
+
+---
+
+## 📜 License & Compliance
+
+### License
+
+This project is licensed under the **MIT License** - see the [LICENSE](LICENSE) file for details.
+
+### Data Source Attribution
+
+This project uses data from **Quran Foundation Content APIs v4**, which incorporates data from Quran.com:
+
+- **Quran.com**: Licensed under MIT License (Copyright © 2016 Quran.com)
+- **Quran Foundation APIs**: Subject to Quran Foundation's Terms of Service
+
+### Compliance Requirements
+
+**⚠️ IMPORTANT**: Users must comply with:
+
+1. **MIT License terms** for this exporter tool
+2. **Quran Foundation's Terms of Service** for API usage
+3. **Islamic principles** when handling sacred text
+4. **Attribution requirements** when redistributing data
+
+### Data Usage Guidelines
+
+- ✅ **Permitted**: Personal study, research, educational use
+- ✅ **Permitted**: Building Islamic applications with proper attribution
+- ⚠️ **Required**: Acknowledge data sources in derivative works
+- ❌ **Prohibited**: Commercial use without proper licensing
+- ❌ **Prohibited**: Misrepresentation or alteration of Quranic text
+
+For the most current terms, visit: https://quran.foundation/terms-of-service
+
+### Disclaimer
+
+This tool is **not officially affiliated** with Quran.com or Quran Foundation. It's an independent project that interfaces with their public APIs. Users are responsible for ensuring compliance with all applicable terms and Islamic guidelines.
+
+---
+
+## 🤝 Contributing
+
+1. Fork the repository
+2. Create a feature branch (`git checkout -b feature/amazing-feature`)
+3. Commit your changes (`git commit -m 'Add amazing feature'`)
+4. Push to the branch (`git push origin feature/amazing-feature`)
+5. Open a Pull Request
+
+---
+
+## 📞 Support
+
+If you encounter issues:
+
+1. Check [Issues](../../issues) for similar problems
+2. Create a new issue with error details
+3. Include your `.env` configuration (without sensitive credentials)
+4. Include log output for debugging
+
+---
+
+**Made with ❤️ for the Ummah**

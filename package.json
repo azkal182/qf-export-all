@@ -1,5 +1,6 @@
 {
   "name": "qf-export-all",
+  "description": "Export all Quran Foundation Content APIs v4 endpoints to NDJSON format with PostgreSQL import capability",
   "version": "0.3.0",
   "type": "module",
   "scripts": {
