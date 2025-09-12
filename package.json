@@ -1,0 +1,28 @@
+{
+  "name": "qf-export-all",
+  "version": "0.3.0",
+  "type": "module",
+  "scripts": {
+    "dev:fetch": "node --loader ts-node/esm --project tsconfig.dev.json src/run.ts",
+    "dev:import": "node --loader ts-node/esm --project tsconfig.dev.json src/import.ts",
+    "dev:validate": "node --loader ts-node/esm --project tsconfig.dev.json src/validate.ts",
+    "build": "tsc --project tsconfig.build.json",
+    "fetch": "npm run build && node dist/run.js",
+    "fetch:resume": "CHECKPOINT_PATH=.checkpoint.json npm run build && node dist/run.js",
+    "import": "npm run build && node dist/import.js",
+    "validate": "npm run build && node dist/validate.js"
+  },
+  "dependencies": {
+    "axios": "^1.7.7",
+    "dotenv": "^16.4.5",
+    "p-limit": "^5.0.0",
+    "pg": "^8.12.0",
+    "pg-copy-streams": "^6.0.5"
+  },
+  "devDependencies": {
+    "@types/node": "^24.3.1",
+    "@types/pg-copy-streams": "^1.2.5",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.9.2"
+  }
+}
