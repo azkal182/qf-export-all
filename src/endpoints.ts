@@ -175,23 +175,23 @@ export const Audio = {
 
 export const Translations = {
   bySurah: {
-    path: "/translations/{resource_id}/surah/{chapter_number}",
+    path: "/translations/{resource_id}/by_chapter/{chapter_number}",
     params: ["language", "page", "per_page"],
   },
   byPage: {
-    path: "/translations/{resource_id}/page/{page_number}",
+    path: "/translations/{resource_id}/by_page/{page_number}",
     params: ["language", "page", "per_page"],
   },
   byJuz: {
-    path: "/translations/{resource_id}/juz/{juz_number}",
+    path: "/translations/{resource_id}/by_juz/{juz_number}",
     params: ["language", "page", "per_page"],
   },
   byHizb: {
-    path: "/translations/{resource_id}/hizb/{hizb_number}",
+    path: "/translations/{resource_id}/by_hizb/{hizb_number}",
     params: ["language", "page", "per_page"],
   },
   byRub: {
-    path: "/translations/{resource_id}/rub_el_hizb/{rub_el_hizb_number}",
+    path: "/translations/{resource_id}/by_rub_el_hizb/{rub_el_hizb_number}",
     params: ["language", "page", "per_page"],
   },
   byKey: {
@@ -202,23 +202,23 @@ export const Translations = {
 
 export const Tafsirs = {
   bySurah: {
-    path: "/tafsirs/{resource_id}/surah/{chapter_number}",
+    path: "/tafsirs/{resource_id}/by_chapter/{chapter_number}",
     params: ["language", "page", "per_page"],
   },
   byPage: {
-    path: "/tafsirs/{resource_id}/page/{page_number}",
+    path: "/tafsirs/{resource_id}/by_page/{page_number}",
     params: ["language", "page", "per_page"],
   },
   byJuz: {
-    path: "/tafsirs/{resource_id}/juz/{juz_number}",
+    path: "/tafsirs/{resource_id}/by_juz/{juz_number}",
     params: ["language", "page", "per_page"],
   },
   byHizb: {
-    path: "/tafsirs/{resource_id}/hizb/{hizb_number}",
+    path: "/tafsirs/{resource_id}/by_hizb/{hizb_number}",
     params: ["language", "page", "per_page"],
   },
   byRub: {
-    path: "/tafsirs/{resource_id}/rub_el_hizb/{rub_el_hizb_number}",
+    path: "/tafsirs/{resource_id}/by_rub_el_hizb/{rub_el_hizb_number}",
     params: ["language", "page", "per_page"],
   },
   byKey: {

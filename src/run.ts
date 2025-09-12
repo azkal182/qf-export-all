@@ -11,14 +11,9 @@ import {
   Tafsirs,
   Search,
 } from "./endpoints.js";
-import {
-  normVerse,
-  normWords,
-  normTranslation,
-  normTafsir,
-  normRecitation,
-} from "./normalizers.js";
+import { normVerse, normWords, normRecitation } from "./normalizers.js";
 import { getCP, setCP } from "./checkpoint.js";
+import { log, startHeartbeat, stopHeartbeat } from "./logger.js";
 
 const WORD_FIELDS = [
   "id",
@@ -33,31 +28,79 @@ const WORD_FIELDS = [
   "char_type_name",
 ].join(",");
 
+function wantedResourceLang(): string {
+  return (
+    process.env.RESOURCE_LANG ||
+    process.env.LANGUAGE ||
+    "en"
+  ).toLowerCase();
+}
+
+function normalizeLangCode(input?: string): string {
+  if (!input) return "";
+  // kebanyakan API pakai 'en','ar','id', dst — normalisasikan saja ke lower-case 2-5 char
+  return input.toLowerCase().trim();
+}
+
+// Cek apakah resource match bahasa target.
+// Properti yang sering muncul: language, language_name, iso_code, language_code, etc.
+// Kita coba beberapa kemungkinan.
+function resourceMatchesLang(res: any, target: string): boolean {
+  const t = normalizeLangCode(target);
+
+  const candidates = [
+    normalizeLangCode(res.language),
+    normalizeLangCode(res.language_code),
+    normalizeLangCode(res.iso_code),
+  ].filter(Boolean);
+
+  if (candidates.includes(t)) return true;
+
+  // fallback: cek berdasarkan nama bahasa (mis. "Indonesian", "Bahasa Indonesia")
+  const ln = String(res.language_name || res.name || "").toLowerCase();
+  if (t === "id" && (ln.includes("indones") || ln.includes("bahasa")))
+    return true;
+  if (t === "en" && ln.includes("english")) return true;
+  if (t === "ar" && (ln.includes("arab") || ln.includes("العرب"))) return true;
+
+  return false;
+}
+
 function range(n1: number, n2: number) {
   return Array.from({ length: n2 - n1 + 1 }, (_, i) => n1 + i);
 }
 
-// async function fetchPaged(path: string, params: any = {}, maxPages = 999) {
-//   const c = await api();
-//   let page = 1;
-//   while (page <= maxPages) {
-//     const res = await c.get(path, {
-//       params: { ...params, page, per_page: PER_PAGE, language: LANGUAGE },
-//     });
-//     const data = res.data;
-//     yield data;
-//     const total = data?.pagination?.total_pages;
-//     if (!total || page >= total) break;
-//     page++;
-//     await sleep(Number(process.env.SLEEP_MS || 200));
-//   }
-// }
-
 async function run() {
+  log.info("export started", {
+    BASE_URL: process.env.BASE_URL,
+    LANGUAGE: process.env.LANGUAGE,
+    PER_PAGE: process.env.PER_PAGE,
+    ONLY: process.env.ONLY || "(all)",
+  });
+
+  // progress snapshot untuk heartbeat
+  const progress = {
+    chapters_done: 0,
+    verses_ch_done: 0,
+    verses_total_pages: 0,
+    verses_last: { chapter: 0, page: 0 },
+    q_kind: "",
+    q_scope: "",
+    q_value: 0,
+    quran_scripts_done: 0,
+    translations_done: 0,
+    tafsirs_done: 0,
+    audio_reciters_done: 0,
+  };
+
+  startHeartbeat(() => ({ ...progress }));
+
   const c = await api();
 
   // 1) Resources catalogs (IDs untuk downstream fetch)
   if (onlyWants("resources")) {
+    log.info("resources: fetching catalogs");
+
     // languages
     let r = await c.get(Resources.languages.path, {
       params: { language: LANGUAGE },
@@ -85,10 +128,13 @@ async function run() {
     (r.data?.recitations || []).forEach((x: any) =>
       ndjson("recitations.ndjson", x)
     );
+    log.info("resources: done");
   }
 
   // 2) Chapters (list + info)
   if (onlyWants("chapters")) {
+    log.info("chapters: list + info");
+
     const r = await c.get(Chapters.list.path, {
       params: { language: LANGUAGE },
     });
@@ -105,14 +151,18 @@ async function run() {
       );
       await sleep(Number(process.env.SLEEP_MS || 200));
     }
+    progress.chapters_done = (r.data?.chapters || []).length;
+    log.info("chapters: done", { count: progress.chapters_done });
   }
 
-  // 3) Verses (+ words) sweeping all scopes
+  // 3) Verses (+ words) sweeping by chapter, with resume per chapter/page
   if (onlyWants("verses") || onlyWants("words")) {
     for (const s of range(1, 114)) {
-      const startPage = Number(getCP("verses_by_chapter", `ch_${s}_page`, 1));
+      log.info("verses: chapter start", { chapter: s });
 
+      const startPage = Number(getCP("verses_by_chapter", `ch_${s}_page`, 1));
       let page = startPage;
+
       while (true) {
         const r = await c.get(
           Verses.byChapter.path.replace("{chapter_number}", String(s)),
@@ -128,115 +178,232 @@ async function run() {
             },
           }
         );
+
         const verses = r.data?.verses || [];
         if (!verses.length) break;
+
         for (const v of verses) {
           ndjson("verses.ndjson", normVerse(v));
           for (const w of normWords(v)) ndjson("words.ndjson", w);
         }
-        setCP("verses_by_chapter", `ch_${s}_page`, page);
 
-        if (page >= (r.data?.pagination?.total_pages || page)) break;
+        // checkpoint & progress
+        setCP("verses_by_chapter", `ch_${s}_page`, page);
+        progress.verses_ch_done = s;
+        progress.verses_total_pages++;
+        progress.verses_last = { chapter: s, page };
+        log.debug("verses: page done", {
+          chapter: s,
+          page,
+          total_pages: r.data?.pagination?.total_pages,
+        });
+
+        const totalPages = r.data?.pagination?.total_pages || page;
+        if (page >= totalPages) break;
         page++;
         await sleep(Number(process.env.SLEEP_MS || 200));
       }
+
       setCP("verses_by_chapter", `ch_${s}_done`, true);
+      log.info("verses: chapter done", { chapter: s });
     }
-    // plus scopes by page/juz/hizb/rub/key jika ingin redundansi map
+    log.info("verses: all chapters done");
   }
 
-  // 4) Juz (mapping)
+  // 4) Juz (mapping/catalog)
   if (onlyWants("juz")) {
+    log.info("juz: fetching list");
     const r = await c.get(Juz.list.path);
     (r.data?.juzs || r.data || []).forEach((j: any) =>
       ndjson("juzs.ndjson", j)
     );
+    log.info("juz: done");
   }
 
-  // 5) Quran scripts/glyphs (semua kombinasi param umum)
+  // 5) Quran scripts/glyphs with resume per kind+scope
   if (onlyWants("quran")) {
-    const combos = [
+    const scripts = [
+      { kind: "uthmani_simple", path: QuranScripts.uthmani_simple.path },
+      { kind: "uthmani", path: QuranScripts.uthmani.path },
+      { kind: "uthmani_tajweed", path: QuranScripts.uthmani_tajweed.path },
+      { kind: "indopak", path: QuranScripts.indopak.path },
+      { kind: "imlaei_simple", path: QuranScripts.imlaei_simple.path },
+      { kind: "code_v1", path: QuranScripts.code_v1.path },
+      { kind: "code_v2", path: QuranScripts.code_v2.path },
+    ];
+
+    const scopes = [
       { key: "chapter_number", values: range(1, 114) },
       { key: "page_number", values: range(1, 604) },
       { key: "juz_number", values: range(1, 30) },
       { key: "hizb_number", values: range(1, 60) },
       { key: "rub_el_hizb_number", values: range(1, 240) },
     ];
-    async function sweep(path: string, out: string) {
-      for (const cset of combos) {
-        for (const v of cset.values) {
-          const r = await c.get(path, { params: { [cset.key]: v } });
-          ndjson(out, { scope: cset.key, value: v, ...r.data });
+
+    log.info("quran: scripts sweep start");
+
+    for (const sc of scopes) {
+      for (const s of scripts) {
+        const last = Number(getCP(`quran_${s.kind}`, sc.key, 0));
+        for (const v of sc.values) {
+          if (v <= last) continue;
+
+          const r = await c.get(s.path, { params: { [sc.key]: v } });
+          ndjson("quran_scripts.ndjson", {
+            kind: s.kind,
+            scope: sc.key,
+            value: v,
+            payload: r.data,
+          });
+
+          setCP(`quran_${s.kind}`, sc.key, v);
+          progress.q_kind = s.kind;
+          progress.q_scope = sc.key;
+          progress.q_value = v;
+          progress.quran_scripts_done++;
+          log.debug("quran: fetched", {
+            kind: s.kind,
+            scope: sc.key,
+            value: v,
+          });
+
           await sleep(Number(process.env.SLEEP_MS || 200));
         }
+        setCP(`quran_${s.kind}`, `${sc.key}_done`, true);
       }
     }
-    await sweep(
-      QuranScripts.uthmani_simple.path,
-      "quran_uthmani_simple.ndjson"
-    );
-    await sweep(QuranScripts.uthmani.path, "quran_uthmani.ndjson");
-    await sweep(
-      QuranScripts.uthmani_tajweed.path,
-      "quran_uthmani_tajweed.ndjson"
-    );
-    await sweep(QuranScripts.indopak.path, "quran_indopak.ndjson");
-    await sweep(QuranScripts.imlaei_simple.path, "quran_imlaei_simple.ndjson");
-    await sweep(QuranScripts.code_v1.path, "quran_code_v1.ndjson");
-    await sweep(QuranScripts.code_v2.path, "quran_code_v2.ndjson");
+    log.info("quran: scripts done", { fetched: progress.quran_scripts_done });
   }
 
-  // 6) Translations & Tafsirs (iterate all resources)
+  // 6) Translations & Tafsirs (iterate all resources) with resume per resource+chapter+page
   if (onlyWants("translations") || onlyWants("tafsirs")) {
-    const tr = await c.get(Resources.translations.path, {
-      params: { language: LANGUAGE },
-    });
-    const tf = await c.get(Resources.tafsirs.path, {
-      params: { language: LANGUAGE },
-    });
-    const trs = tr.data?.translations || [];
-    const tfs = tf.data?.tafsirs || [];
+    // --- Translations ---
+    if (onlyWants("translations")) {
+      const tr = await c.get(Resources.translations.path, {
+        params: { language: LANGUAGE },
+      });
+      const trs = tr.data?.translations || [];
 
-    for (const res of trs) {
-      for (const s of range(1, 114)) {
-        const r = await c.get(
-          Translations.bySurah.path
-            .replace("{resource_id}", String(res.id))
-            .replace("{chapter_number}", String(s)),
-          { params: { language: LANGUAGE } }
-        );
-        (r.data?.translations || r.data?.result || []).forEach((x: any) =>
-          ndjson("translations.ndjson", { resource_id: res.id, ...x })
-        );
-        await sleep(Number(process.env.SLEEP_MS || 200));
+      for (const res of trs) {
+        log.info("translations: resource start", {
+          resource_id: res.id,
+          name: res.name,
+        });
+
+        for (const s of range(1, 114)) {
+          let page = Number(
+            getCP(`translations_res_${res.id}`, `ch_${s}_page`, 1)
+          );
+          while (true) {
+            const r = await c.get(
+              Translations.bySurah.path
+                .replace("{resource_id}", String(res.id))
+                .replace("{chapter_number}", String(s)),
+              { params: { language: LANGUAGE, page, per_page: PER_PAGE } }
+            );
+
+            const items = r.data?.translations || r.data?.result || [];
+            if (!items.length) break;
+            for (const x of items) {
+              ndjson("translations.ndjson", { resource_id: res.id, ...x });
+            }
+
+            setCP(`translations_res_${res.id}`, `ch_${s}_page`, page);
+            log.debug("translations: page", {
+              resource_id: res.id,
+              chapter: s,
+              page,
+              count: items.length,
+            });
+
+            const total = r.data?.pagination?.total_pages || page;
+            if (page >= total) break;
+            page++;
+            await sleep(Number(process.env.SLEEP_MS || 200));
+          }
+          setCP(`translations_res_${res.id}`, `ch_${s}_done`, true);
+        }
+
+        progress.translations_done++;
+        setCP("translations", `res_${res.id}_done`, true);
+        log.info("translations: resource done", { resource_id: res.id });
       }
+      log.info("translations: all done", {
+        resources: progress.translations_done,
+      });
     }
 
-    for (const res of tfs) {
-      for (const s of range(1, 114)) {
-        const r = await c.get(
-          Tafsirs.bySurah.path
-            .replace("{resource_id}", String(res.id))
-            .replace("{chapter_number}", String(s)),
-          { params: { language: LANGUAGE } }
-        );
-        (r.data?.tafsirs || r.data?.result || []).forEach((x: any) =>
-          ndjson("tafsirs.ndjson", { resource_id: res.id, ...x })
-        );
-        await sleep(Number(process.env.SLEEP_MS || 200));
+    // --- Tafsirs ---
+    if (onlyWants("tafsirs")) {
+      const tf = await c.get(Resources.tafsirs.path, {
+        params: { language: LANGUAGE },
+      });
+      const tfs = tf.data?.tafsirs || [];
+
+      for (const res of tfs) {
+        log.info("tafsirs: resource start", {
+          resource_id: res.id,
+          name: res.name,
+        });
+
+        for (const s of range(1, 114)) {
+          let page = Number(getCP(`tafsirs_res_${res.id}`, `ch_${s}_page`, 1));
+          while (true) {
+            const r = await c.get(
+              Tafsirs.bySurah.path
+                .replace("{resource_id}", String(res.id))
+                .replace("{chapter_number}", String(s)),
+              { params: { language: LANGUAGE, page, per_page: PER_PAGE } }
+            );
+
+            const items = r.data?.tafsirs || r.data?.result || [];
+            if (!items.length) break;
+            for (const x of items) {
+              ndjson("tafsirs.ndjson", { resource_id: res.id, ...x });
+            }
+
+            setCP(`tafsirs_res_${res.id}`, `ch_${s}_page`, page);
+            log.debug("tafsirs: page", {
+              resource_id: res.id,
+              chapter: s,
+              page,
+              count: items.length,
+            });
+
+            const total = r.data?.pagination?.total_pages || page;
+            if (page >= total) break;
+            page++;
+            await sleep(Number(process.env.SLEEP_MS || 200));
+          }
+          setCP(`tafsirs_res_${res.id}`, `ch_${s}_done`, true);
+        }
+
+        progress.tafsirs_done++;
+        setCP("tafsirs", `res_${res.id}_done`, true);
+        log.info("tafsirs: resource done", { resource_id: res.id });
       }
+      log.info("tafsirs: all done", { resources: progress.tafsirs_done });
     }
   }
 
-  // 7) Audio (recitations + chapter audio files)
+  // 7) Audio (recitations + chapter audio files) with resume per reciter id
   if (onlyWants("audio")) {
+    log.info("audio: recitations catalog");
     const r = await c.get(Audio.recitations.path, {
       params: { language: LANGUAGE },
     });
     (r.data?.recitations || []).forEach((x: any) =>
       ndjson("recitations.ndjson", normRecitation(x))
     );
+
+    log.info("audio: chapter_audio_files start");
     for (const rec of r.data?.recitations || []) {
+      if (getCP("audio", `reciter_${rec.id}_done`, false)) {
+        log.debug("audio: skip reciter (already done)", { reciter_id: rec.id });
+        continue;
+      }
+
+      log.debug("audio: reciter", { reciter_id: rec.id, name: rec.name });
       const ra = await c.get(
         Audio.chapterAudioFiles.path.replace("{recitation_id}", String(rec.id)),
         { params: { language: LANGUAGE } }
@@ -244,8 +411,14 @@ async function run() {
       (ra.data?.audio_files || []).forEach((x: any) =>
         ndjson("chapter_audio_files.ndjson", x)
       );
+
+      setCP("audio", `reciter_${rec.id}_done`, true);
+      progress.audio_reciters_done++;
       await sleep(Number(process.env.SLEEP_MS || 200));
     }
+    log.info("audio: chapter_audio_files done", {
+      reciters: progress.audio_reciters_done,
+    });
   }
 
   // 8) Search (opsional seed)
@@ -257,10 +430,15 @@ async function run() {
     ndjson("search.ndjson", r.data);
   }
 
-  console.log("Done. NDJSON written to ./out");
+  stopHeartbeat();
+  log.info("export finished ✅");
 }
 
 run().catch((e) => {
-  console.error("Fatal:", e?.response?.data || e.message);
+  log.error("export failed", {
+    error: (e as any)?.message || String(e),
+    data: (e as any)?.response?.data,
+  });
+  stopHeartbeat();
   process.exit(1);
 });
