@@ -25,5 +25,54 @@
     "@types/pg-copy-streams": "^1.2.5",
     "ts-node": "^10.9.2",
     "typescript": "^5.9.2"
+  },
+  "keywords": [
+    "quran",
+    "islamic",
+    "api",
+    "export",
+    "ndjson",
+    "postgresql",
+    "verses",
+    "translations",
+    "tafsir",
+    "audio",
+    "content-api",
+    "data-export",
+    "oauth2",
+    "jwt",
+    "checkpoint",
+    "retry",
+    "telegram"
+  ],
+  "author": "Azkal Arof mohazkalarif@gmail.com",
+  "license":"MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/azkal182/qf-export-all.git"
+  },
+  "bugs": {
+    "url": "https://github.com/azkal182/qf-export-all/issues"
+  },
+    "homepage": "https://github.com/azkal182/qf-export-all#readme",
+     "engines": {
+    "node": ">=18.0.0",
+    "npm": ">=8.0.0"
+  },
+  "files": [
+    "dist/",
+    "sql/",
+    "LICENSE",
+    "README.md",
+    ".env.example"
+  ],
+
+  "publishConfig": {
+    "access": "public"
+  },
+  "volta": {
+    "node": "20.8.0",
+    "npm": "10.1.0"
   }
+
 }
