@@ -55,3 +55,34 @@ export function normRecitation(r: any) {
     files_size: r.files_size,
   };
 }
+
+// Normalisasi timestamps (verse-level) dari response chapterAudioTimestamps
+export function normVerseTimestamps(audioFileId: number | string, item: any) {
+  // item contoh: { verse_key, timestamp_from, timestamp_to, duration, segments?: [[idx,start,end],...] }
+  return {
+    audio_file_id: Number(audioFileId),
+    verse_key: String(item.verse_key),
+    from_ms: Number(item.timestamp_from ?? 0),
+    to_ms: Number(item.timestamp_to ?? 0),
+    duration_ms: Number(
+      item.duration ??
+        Number(item.timestamp_to ?? 0) - Number(item.timestamp_from ?? 0)
+    ),
+  };
+}
+
+// Normalisasi word-level segments (jika tersedia)
+export function* normWordSegments(audioFileId: number | string, item: any) {
+  // item.segments: [[word_index, start_ms, end_ms], ...]
+  const segs = Array.isArray(item.segments) ? item.segments : [];
+  for (const seg of segs) {
+    const [word_index, start_ms, end_ms] = seg;
+    yield {
+      audio_file_id: Number(audioFileId),
+      verse_key: String(item.verse_key),
+      word_index: Number(word_index),
+      start_ms: Number(start_ms),
+      end_ms: Number(end_ms),
+    };
+  }
+}

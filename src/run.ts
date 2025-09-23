@@ -11,7 +11,13 @@ import {
   Tafsirs,
   Search,
 } from "./endpoints.js";
-import { normVerse, normWords, normRecitation } from "./normalizers.js";
+import {
+  normVerse,
+  normWords,
+  normRecitation,
+  normVerseTimestamps,
+  normWordSegments,
+} from "./normalizers.js";
 import { getCP, setCP } from "./checkpoint.js";
 import { log, startHeartbeat, stopHeartbeat } from "./logger.js";
 
@@ -648,14 +654,137 @@ async function run() {
     });
   }
 
-  // 8) Search (opsional seed)
-  if (onlyWants("search")) {
-    const q = "bismillah"; // contoh
-    const r = await c.get(Search.search.path, {
-      params: { q, size: 50, page: 1, language: LANGUAGE },
-    });
-    ndjson("search.ndjson", r.data);
+  // === AUDIO SEGMENTS (chapter-level timestamps & word segments) ===
+  if (
+    onlyWants("audio") ||
+    String(process.env.AUDIO_SEGMENTS || "false").toLowerCase() === "true"
+  ) {
+    const enableSegments =
+      String(process.env.AUDIO_SEGMENTS || "false").toLowerCase() === "true";
+    if (!enableSegments) {
+      log.info("audio-segments: disabled (AUDIO_SEGMENTS=false) — skip");
+    } else {
+      log.info("audio-segments: start");
+
+      // Ambil katalog recitations
+      const recRes = await c.get(Audio.recitations.path, {
+        params: { language: LANGUAGE },
+      });
+      const reciters = recRes.data?.recitations || [];
+
+      // Filter reciter jika diset
+      const recFilter = (process.env.AUDIO_SEGMENTS_RECITERS || "")
+        .split(",")
+        .map((s) => s.trim())
+        .filter(Boolean)
+        .map(Number);
+      const recList = recFilter.length
+        ? reciters.filter((r: any) => recFilter.includes(Number(r.id)))
+        : reciters;
+
+      // Siapkan daftar chapter
+      const chEnv = String(process.env.AUDIO_SEGMENTS_CHAPTERS || "").trim();
+      let chapters: number[] = [];
+      if (chEnv) {
+        // parse "1-3,5,7-9"
+        for (const token of chEnv.split(",")) {
+          const t = token.trim();
+          if (!t) continue;
+          if (t.includes("-")) {
+            const [a, b] = t.split("-").map((x) => Number(x.trim()));
+            if (Number.isFinite(a) && Number.isFinite(b)) {
+              const lo = Math.min(a, b),
+                hi = Math.max(a, b);
+              for (let i = lo; i <= hi; i++) chapters.push(i);
+            }
+          } else {
+            const n = Number(t);
+            if (Number.isFinite(n)) chapters.push(n);
+          }
+        }
+      } else {
+        chapters = Array.from({ length: 114 }, (_, i) => i + 1);
+      }
+
+      // Loop reciter → chapter (RESUME per reciter+chapter)
+      for (const rec of recList) {
+        for (const ch of chapters) {
+          const lastDone = getCP(
+            "audio_segments",
+            `rec_${rec.id}_ch_${ch}_done`,
+            false
+          );
+          if (lastDone) {
+            log.debug("audio-segments: skip (done)", {
+              reciter_id: rec.id,
+              chapter: ch,
+            });
+            continue;
+          }
+
+          // panggil endpoint chapter-level timestamps
+          const path = Audio.chapterAudioTimestamps.path
+            .replace("{recitation_id}", String(rec.id))
+            .replace("{chapter_number}", String(ch));
+
+          // segments=true agar dapat word-level segments (jika tersedia)
+          const r = await c.get(path, {
+            params: { language: LANGUAGE, segments: true },
+          });
+
+          // Normalisasi & simpan
+          const audioFile = r.data?.audio_file || r.data || {};
+          const audioFileId = audioFile.id ?? audioFile.audio_file?.id;
+          const timestamps = r.data?.timestamps || audioFile.timestamps || [];
+
+          // mungkin beberapa reciter tidak punya timestamps
+          if (
+            !audioFileId ||
+            !Array.isArray(timestamps) ||
+            timestamps.length === 0
+          ) {
+            log.warn("audio-segments: no timestamps", {
+              reciter_id: rec.id,
+              chapter: ch,
+            });
+            setCP("audio_segments", `rec_${rec.id}_ch_${ch}_done`, true);
+            await sleep(Number(process.env.SLEEP_MS || 200));
+            continue;
+          }
+
+          for (const item of timestamps) {
+            // verse-level timestamps
+            const vt = normVerseTimestamps(audioFileId, item);
+            ndjson("verse_timestamps.ndjson", vt);
+
+            // word-level segments (jika ada)
+            for (const ws of normWordSegments(audioFileId, item)) {
+              ndjson("word_segments.ndjson", ws);
+            }
+          }
+
+          setCP("audio_segments", `rec_${rec.id}_ch_${ch}_done`, true);
+          log.debug("audio-segments: chapter done", {
+            reciter_id: rec.id,
+            chapter: ch,
+            items: timestamps.length,
+          });
+          await sleep(Number(process.env.SLEEP_MS || 200));
+        }
+      }
+
+      log.info("audio-segments: done");
+    }
   }
+
+  // 8) Search (opsional seed)
+  //   if (onlyWants("search")) {
+  //     const q = "bismillah"; // contoh
+  //     const r = await c.get(Search.search.path, {
+  //       params: { q, size: 50, page: 1, language: LANGUAGE },
+  //     });
+  //     ndjson("search.ndjson", r.data);
+  //   }
 
   stopHeartbeat();
   log.info("export finished ✅");

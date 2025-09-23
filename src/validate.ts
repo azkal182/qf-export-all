@@ -31,6 +31,8 @@ async function main() {
       SELECT 'tafsirs', COUNT(*) FROM tafsirs UNION ALL
       SELECT 'recitations', COUNT(*) FROM recitations UNION ALL
       SELECT 'chapter_audio_files', COUNT(*) FROM chapter_audio_files
+      UNION ALL SELECT 'verse_timestamps', COUNT(*) FROM verse_timestamps
+      UNION ALL SELECT 'word_segments', COUNT(*) FROM word_segments
     `
       )
     );
@@ -79,6 +81,23 @@ async function main() {
       FROM pos p
       WHERE NOT (p.minp = 1 AND p.maxp = p.cnt)
       LIMIT 10;
+    `
+      )
+    );
+
+    console.log(
+      "\n== Verses yang punya timestamps tapi 0 segmen kata (sekadar sampling) =="
+    );
+    console.table(
+      await q(
+        client,
+        `
+      SELECT vt.verse_key, COUNT(ws.*) AS n_segments
+        FROM verse_timestamps vt
+        LEFT JOIN word_segments ws USING (audio_file_id, verse_key)
+        GROUP BY vt.verse_key
+        ORDER BY n_segments ASC
+        LIMIT 10;
     `
       )
     );

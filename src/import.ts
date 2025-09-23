@@ -203,6 +203,30 @@ const maps: MapSpec[] = [
       o.duration || o.duration_seconds || null,
     ],
   },
+  {
+    file: "verse_timestamps.ndjson",
+    table: "verse_timestamps",
+    columns: ["audio_file_id", "verse_key", "from_ms", "to_ms", "duration_ms"],
+    map: (o) => [
+      o.audio_file_id,
+      o.verse_key,
+      o.from_ms,
+      o.to_ms,
+      o.duration_ms,
+    ],
+  },
+  {
+    file: "word_segments.ndjson",
+    table: "word_segments",
+    columns: ["audio_file_id", "verse_key", "word_index", "start_ms", "end_ms"],
+    map: (o) => [
+      o.audio_file_id,
+      o.verse_key,
+      o.word_index,
+      o.start_ms,
+      o.end_ms,
+    ],
+  },
 ];
 
 function* iterNDJSON(filePath: string) {
@@ -234,8 +258,16 @@ async function importFile(client: Client, spec: MapSpec) {
     console.warn(`[skip] ${spec.file} not found`);
     return;
   }
+
   console.log(`[import] ${spec.file} -> ${spec.table}`);
-  await client.query(`TRUNCATE ${spec.table} RESTART IDENTITY CASCADE`);
+
+  try {
+    await client.query(`TRUNCATE ${spec.table} RESTART IDENTITY CASCADE`);
+  } catch (err: any) {
+    console.error(`[error] gagal TRUNCATE ${spec.table}`, err.message);
+    return;
+  }
+
   const stream = client.query(
     copyFrom(
       `COPY ${spec.table} (${spec.columns.join(
@@ -243,22 +275,102 @@ async function importFile(client: Client, spec: MapSpec) {
       )}) FROM STDIN WITH (FORMAT csv)`
     )
   );
-  for (const obj of iterNDJSON(path)) {
-    const row = spec.map(obj);
-    const csv = toCSVRow(row);
-    if (!stream.write(csv)) await new Promise((r) => stream.once("drain", r));
-  }
-  await new Promise((resolve, reject) => stream.end(resolve));
+
+  let rowCount = 0;
+
+  return new Promise<void>((resolve, reject) => {
+    stream.on("error", (err: any) => {
+      console.error(
+        `[error] COPY gagal untuk tabel ${spec.table}: ${err.message}`
+      );
+      reject(err);
+    });
+
+    stream.on("finish", () => {
+      console.log(`[done] ${spec.table}: ${rowCount} rows imported`);
+      resolve();
+    });
+
+    try {
+      for (const obj of iterNDJSON(path)) {
+        let csv: string;
+        try {
+          const row = spec.map(obj);
+          csv = toCSVRow(row);
+        } catch (e: any) {
+          console.error(
+            `[error] mapping gagal untuk ${spec.file}, obj: ${JSON.stringify(
+              obj
+            )}, msg: ${e.message}`
+          );
+          continue; // skip object rusak
+        }
+        if (!stream.write(csv)) {
+          stream.once("drain", () => {});
+        }
+        rowCount++;
+      }
+    } catch (e: any) {
+      console.error(`[fatal] gagal membaca file ${spec.file}: ${e.message}`);
+      reject(e);
+    }
+
+    stream.end();
+  });
 }
+
+// async function importFile(client: Client, spec: MapSpec) {
+//   const path = `${outdir}/${spec.file}`;
+//   if (!fs.existsSync(path)) {
+//     console.warn(`[skip] ${spec.file} not found`);
+//     return;
+//   }
+//   console.log(`[import] ${spec.file} -> ${spec.table}`);
+//   await client.query(`TRUNCATE ${spec.table} RESTART IDENTITY CASCADE`);
+//   const stream = client.query(
+//     copyFrom(
+//       `COPY ${spec.table} (${spec.columns.join(
+//         ","
+//       )}) FROM STDIN WITH (FORMAT csv)`
+//     )
+//   );
+//   for (const obj of iterNDJSON(path)) {
+//     const row = spec.map(obj);
+//     const csv = toCSVRow(row);
+//     if (!stream.write(csv)) await new Promise((r) => stream.once("drain", r));
+//   }
+//   await new Promise((resolve, reject) => stream.end(resolve));
+// }
+
+// async function main() {
+//   const client = new Client({ connectionString: DATABASE_URL });
+//   await client.connect();
+//   try {
+//     for (const m of maps) {
+//       await importFile(client, m);
+//     }
+//     console.log("Import done ✅");
+//   } finally {
+//     await client.end();
+//   }
+// }
 
 async function main() {
   const client = new Client({ connectionString: DATABASE_URL });
   await client.connect();
   try {
     for (const m of maps) {
-      await importFile(client, m);
+      try {
+        await importFile(client, m);
+      } catch (e: any) {
+        console.error(
+          `[fatal] import gagal untuk ${m.file} -> ${m.table}: ${e.message}`
+        );
+        // bisa pilih: break agar berhenti total, atau continue agar lanjut file berikut
+        break;
+      }
     }
-    console.log("Import done ✅");
+    console.log("Import selesai ✅");
   } finally {
     await client.end();
   }

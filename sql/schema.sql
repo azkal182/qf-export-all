@@ -352,3 +352,38 @@ FROM pg_tables
 WHERE schemaname = 'public'
 ORDER BY pg_total_relation_size(schemaname||'.'||tablename) DESC;
 */
+
+
+-- verse-level timestamps (per audio_file_id + ayat)
+CREATE TABLE IF NOT EXISTS verse_timestamps (
+  id BIGSERIAL PRIMARY KEY,
+  audio_file_id BIGINT NOT NULL,
+  verse_key TEXT NOT NULL,
+  from_ms INTEGER NOT NULL DEFAULT 0,
+  to_ms INTEGER NOT NULL DEFAULT 0,
+  duration_ms INTEGER NOT NULL DEFAULT 0
+);
+
+-- index untuk lookup cepat
+CREATE INDEX IF NOT EXISTS idx_verse_timestamps_audio_file_id ON verse_timestamps(audio_file_id);
+CREATE INDEX IF NOT EXISTS idx_verse_timestamps_verse_key ON verse_timestamps(verse_key);
+
+-- word-level segments (per kata)
+CREATE TABLE IF NOT EXISTS word_segments (
+  id BIGSERIAL PRIMARY KEY,
+  audio_file_id BIGINT NOT NULL,
+  verse_key TEXT NOT NULL,
+  word_index INTEGER NOT NULL,
+  start_ms INTEGER NOT NULL DEFAULT 0,
+  end_ms INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE INDEX IF NOT EXISTS idx_word_segments_audio_file_id ON word_segments(audio_file_id);
+CREATE INDEX IF NOT EXISTS idx_word_segments_verse_key ON word_segments(verse_key);
+CREATE INDEX IF NOT EXISTS idx_word_segments_audio_verse_word ON word_segments(audio_file_id, verse_key, word_index);
+
+-- (opsional) kalau kamu sudah punya table chapter_audio_files dan ingin FK:
+-- ALTER TABLE verse_timestamps
+--   ADD CONSTRAINT fk_vt_audio FOREIGN KEY (audio_file_id) REFERENCES chapter_audio_files(id) ON DELETE CASCADE;
+-- ALTER TABLE word_segments
+--   ADD CONSTRAINT fk_ws_audio FOREIGN KEY (audio_file_id) REFERENCES chapter_audio_files(id) ON DELETE CASCADE;

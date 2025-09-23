@@ -165,11 +165,17 @@ export const Resources = {
 };
 
 export const Audio = {
-  recitations: { path: "/recitations", params: ["language"] }, // list recitations (duplicate to resources but commonly present) :contentReference[oaicite:4]{index=4}
-  recitationInfo: { path: "/recitations/{recitation_id}", params: [] },
+  recitations: { path: "/resources/recitations", params: ["language"] }, // list recitations (duplicate to resources but commonly present) :contentReference[oaicite:4]{index=4}
+  recitationInfo: {
+    path: "/recitations/{recitation_id}",
+    params: [],
+  },
   chapterAudioFiles: {
-    path: "/chapter_recitations/{recitation_id}/audio_files",
+    path: "/chapter_recitations/{recitation_id}",
     params: ["language"],
+  },
+  chapterAudioTimestamps: {
+    path: "/chapter_recitations/{recitation_id}/{chapter_number}",
   },
 };
 

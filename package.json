@@ -10,6 +10,7 @@
     "build": "tsc --project tsconfig.build.json",
     "fetch": "npm run build && node dist/run.js",
     "fetch:resume": "CHECKPOINT_PATH=.checkpoint.json npm run build && node dist/run.js",
+    "fetch:resume:win": "cross-env CHECKPOINT_PATH=.checkpoint.json npm run build && node dist/run.js",
     "import": "npm run build && node dist/import.js",
     "validate": "npm run build && node dist/validate.js"
   },
@@ -23,6 +24,7 @@
   "devDependencies": {
     "@types/node": "^24.3.1",
     "@types/pg-copy-streams": "^1.2.5",
+    "cross-env": "^10.0.0",
     "ts-node": "^10.9.2",
     "typescript": "^5.9.2"
   },
@@ -46,7 +48,7 @@
     "telegram"
   ],
   "author": "Azkal Arof mohazkalarif@gmail.com",
-  "license":"MIT",
+  "license": "MIT",
   "repository": {
     "type": "git",
     "url": "https://github.com/azkal182/qf-export-all.git"
@@ -54,8 +56,8 @@
   "bugs": {
     "url": "https://github.com/azkal182/qf-export-all/issues"
   },
-    "homepage": "https://github.com/azkal182/qf-export-all#readme",
-     "engines": {
+  "homepage": "https://github.com/azkal182/qf-export-all#readme",
+  "engines": {
     "node": ">=18.0.0",
     "npm": ">=8.0.0"
   },
@@ -66,7 +68,6 @@
     "README.md",
     ".env.example"
   ],
-
   "publishConfig": {
     "access": "public"
   },
@@ -74,5 +75,4 @@
     "node": "20.8.0",
     "npm": "10.1.0"
   }
-
 }
